@@ -13,7 +13,6 @@ class Parser:
         while dados.find(b'\r\n') != -1:
             out.append(dados.split(b'\r\n', 1)[0])
             dados = dados.split(b'\r\n', 1)[1]
-            out[-1] += b'\r\n'
         if len(dados) > 0:
             self.residue = dados
         return out
@@ -24,12 +23,57 @@ class Command:
 
 class Ping(Command):
     def handle(self, conexao, payload):
-        conexao.enviar(b':server PONG server :' + payload)
+        conexao.enviar(b':server PONG server :' + payload + b'\r\n')
 
+class Nick(Command):
+    def handle(self, conexao, payload):
+        apelido_antigo = procurar_conexao(conexao)
+
+        if validar_nome(payload) and procurar_nome(payload) and apelido_antigo == None:
+            # Verifica se o nome eh valido e nao ocorre repeticao
+            conexao.enviar(b':server 001 %s :Welcome\r\n' % payload)
+            conexao.enviar(b':server 422 %s :MOTD File is missing\r\n' % payload)
+            usernames[payload.lower()] = conexao
+        elif not validar_nome(payload):
+            # Verifica se o nome nao eh valido
+            conexao.enviar(b':server 432 * %s :Erroneous nickname\r\n' % payload)
+        elif apelido_antigo == None:
+            # Usuario nao cadastrado quer utilizar um nome ja em uso
+            conexao.enviar(b':server 433 * %s :Nickname is already in use\r\n' % payload)
+        elif procurar_nome(payload) and apelido_antigo:
+            # Verifica se o usuario quer alterar o proprio nome
+            conexao.enviar(b':%s NICK %s\r\n' % (apelido_antigo, payload))
+            # Insere o apelido novo e a conexao
+            usernames[payload.lower()] = conexao
+            # Remove o registro do apelido antigo
+            usernames.pop(apelido_antigo)
+        else:
+            # Usuario ja cadastrado quer utilizar um nome em uso
+            conexao.enviar(b':server 433 %s %s :Nickname is already in use\r\n' % (apelido_antigo, payload))
+
+class PrivMsg(Command):
+    def handle(self, conexao, payload):
+        destinatario, conteudo = payload.split(b' :')
+        remetente = procurar_conexao(conexao)
+        if destinatario[0] == '#':
+            # Mensagem para um canal
+            pass
+        elif not procurar_nome(destinatario):
+            # Mensagem para outro usuario
+            usernames[destinatario.lower()].enviar(b':%s PRIVMSG %s :%s\r\n' % (remetente, destinatario, conteudo))
 
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
+# Se o nick não estiver registrado no servidor retorna true
+def procurar_nome(nome):
+    return nome.lower() not in usernames
+
+def procurar_conexao(conexao):
+    apelido = [key for key, value in usernames.items() if value == conexao]
+    apelido = None if len(apelido) == 0 else apelido[0]
+    return apelido
+    
 
 def sair(conexao):
     print(conexao, 'conexão fechada')
@@ -53,8 +97,11 @@ def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
     conexao.registrar_recebedor(dados_recebidos)
 
+usernames = { }
 commands = { }
 commands[b'PING'] = Ping()
+commands[b'NICK'] = Nick()
+commands[b'PRIVMSG'] = PrivMsg()
 parser = Parser()
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)

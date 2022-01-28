@@ -3,6 +3,29 @@ import asyncio
 from tcp import Servidor
 import re
 
+class Parser:
+    def __init__(self):
+        self.residue = b''
+    
+    def parse_line(self, dados):
+        out = []
+        dados = self.residue + dados
+        while dados.find(b'\r\n') != -1:
+            out.append(dados.split(b'\r\n', 1)[0])
+            dados = dados.split(b'\r\n', 1)[1]
+            out[-1] += b'\r\n'
+        if len(dados) > 0:
+            self.residue = dados
+        return out
+
+class Command:
+    def handle(self, conexao, payload):
+        pass
+
+class Ping(Command):
+    def handle(self, conexao, payload):
+        conexao.enviar(b':server PONG server :' + payload)
+
 
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
@@ -16,10 +39,13 @@ def sair(conexao):
 def dados_recebidos(conexao, dados):
     if dados == b'':
         return sair(conexao)
-    command = dados.split(b' ', 1)[0]
-    payload = dados.split(b' ', 1)[1]
-    if command == b'PING':
-        conexao.enviar(b':server PONG server :' + payload)
+
+    lines = parser.parse_line(dados)
+    for line in lines:
+        prefix = line.split(b' ', 1)[0]
+        payload = line.split(b' ', 1)[1]
+        if commands.get(prefix) is not None:
+            commands[prefix].handle(conexao, payload)
     print(conexao, dados)
 
 
@@ -27,7 +53,9 @@ def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
     conexao.registrar_recebedor(dados_recebidos)
 
-
+commands = { }
+commands[b'PING'] = Ping()
+parser = Parser()
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
 asyncio.get_event_loop().run_forever()

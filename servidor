@@ -51,14 +51,47 @@ class Nick(Command):
             # Usuario ja cadastrado quer utilizar um nome em uso
             conexao.enviar(b':server 433 %s %s :Nickname is already in use\r\n' % (apelido_antigo, payload))
 
+class Join(Command):
+    def handle(self, conexao, payload):
+        # payload: nome do canal
+        apelido_join = procurar_conexao(conexao)
+        if not validar_nome(payload[1:]) or not payload.startswith(b'#'):
+            conexao.enviar(b':server 403 %s :No such channel\r\n' % payload)
+        else:
+            if channels.get(payload.lower()) == None:
+                channels[payload.lower()] = set()
+            channels[payload.lower()].add(conexao)
+            members = channels[payload.lower()]
+            usuarios_canal = []
+            # Guarda a relacao entre usuarios e suas conexoes
+            for member in members:
+                usuarios_canal.append(procurar_conexao(member))
+                member.enviar(b':%s JOIN :%s\r\n' % (apelido_join, payload.lower()))
+            conexao.enviar(b':server 353 %s = %s :%s\r\n' % (apelido_join, payload.lower(), b' '.join(sorted(usuarios_canal))))
+            conexao.enviar(b':server 366 %s %s :End of /NAMES list.\r\n' % (apelido_join, payload.lower()))
+
+
+class Part(Command):
+    def handle(self, conexao, payload):
+        apelido_join = procurar_conexao(conexao)
+        payload = payload.split(b' ')[0]
+        if channels.get(payload.lower()) != None:
+            members = channels[payload.lower()]
+            for member in members:
+                member.enviar(b':%s PART %s\r\n' % (apelido_join, payload.lower()))
+            channels[payload.lower()].remove(conexao)
+
 class PrivMsg(Command):
     def handle(self, conexao, payload):
         destinatario, conteudo = payload.split(b' :')
         remetente = procurar_conexao(conexao)
-        if destinatario[0] == '#':
+        if destinatario.startswith(b'#') and channels.get(destinatario.lower()):
             # Mensagem para um canal
-            pass
-        elif not procurar_nome(destinatario):
+            canal = channels[destinatario.lower()]
+            for member in canal:
+                if member != conexao:
+                    member.enviar(b':%s PRIVMSG %s :%s\r\n' % (remetente, destinatario, conteudo))
+        elif not procurar_nome(destinatario.lower()):
             # Mensagem para outro usuario
             usernames[destinatario.lower()].enviar(b':%s PRIVMSG %s :%s\r\n' % (remetente, destinatario, conteudo))
 
@@ -99,9 +132,12 @@ def conexao_aceita(conexao):
 
 usernames = { }
 commands = { }
+channels = { }
 commands[b'PING'] = Ping()
 commands[b'NICK'] = Nick()
 commands[b'PRIVMSG'] = PrivMsg()
+commands[b'JOIN'] = Join()
+commands[b'PART'] = Part()
 parser = Parser()
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)

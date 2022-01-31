@@ -40,7 +40,7 @@ class Nick(Command):
         elif apelido_antigo == None:
             # Usuario nao cadastrado quer utilizar um nome ja em uso
             conexao.enviar(b':server 433 * %s :Nickname is already in use\r\n' % payload)
-        elif procurar_nome(payload) and apelido_antigo:
+        elif procurar_nome(payload) and apelido_antigo != None:
             # Verifica se o usuario quer alterar o proprio nome
             conexao.enviar(b':%s NICK %s\r\n' % (apelido_antigo, payload))
             # Insere o apelido novo e a conexao
@@ -60,6 +60,9 @@ class Join(Command):
         else:
             if channels.get(payload.lower()) == None:
                 channels[payload.lower()] = set()
+            if user_channels.get(conexao) == None:
+                user_channels[conexao] = set()
+            user_channels[conexao].add(payload.lower())
             channels[payload.lower()].add(conexao)
             members = channels[payload.lower()]
             usuarios_canal = []
@@ -80,6 +83,7 @@ class Part(Command):
             for member in members:
                 member.enviar(b':%s PART %s\r\n' % (apelido_join, payload.lower()))
             channels[payload.lower()].remove(conexao)
+            user_channels[conexao].remove(payload.lower())
 
 class PrivMsg(Command):
     def handle(self, conexao, payload):
@@ -109,6 +113,23 @@ def procurar_conexao(conexao):
     
 
 def sair(conexao):
+    usuario_em_comum = set()
+    if user_channels.get(conexao) != None:
+        for channel_name in user_channels.get(conexao):
+            for member in channels[channel_name]:
+                if member != conexao:
+                    usuario_em_comum.add(member)
+        canais = user_channels[conexao].copy()
+        for channel_name in canais:
+            if channels.get(channel_name) != None:
+                channels[channel_name].remove(conexao)
+        del(user_channels[conexao])
+      
+    for usuario in usuario_em_comum:
+        usuario.enviar(b':%s QUIT :Connection closed\r\n' % procurar_conexao(conexao))
+  
+    if usernames.get(procurar_conexao(conexao)) != None:
+        usernames.pop(procurar_conexao(conexao))  
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
@@ -133,6 +154,7 @@ def conexao_aceita(conexao):
 usernames = { }
 commands = { }
 channels = { }
+user_channels = { }
 commands[b'PING'] = Ping()
 commands[b'NICK'] = Nick()
 commands[b'PRIVMSG'] = PrivMsg()
